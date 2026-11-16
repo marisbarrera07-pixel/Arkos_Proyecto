@@ -1,10 +1,13 @@
+import fs from "node:fs"
+import path from "node:path"
+import { DatabaseSync } from "node:sqlite"
 import sql from "mssql"
 import bcrypt from "bcryptjs"
 import { partesBogota } from "./time.js"
 
 const IDENTITY_INSERT = /INSERT\s+INTO\s+(usuario|obra|horario|asistencia|auditoria|solicitud_ajuste)\b/i
 
-const SCHEMA = `
+const SCHEMA_MSSQL = `
 IF OBJECT_ID(N'dbo.usuario', N'U') IS NULL
 CREATE TABLE dbo.usuario (
   id INT IDENTITY(1,1) PRIMARY KEY,
@@ -85,12 +88,93 @@ CREATE TABLE dbo.solicitud_ajuste (
 );
 `
 
+const SCHEMA_SQLITE = `
+CREATE TABLE IF NOT EXISTS usuario (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  documento TEXT NOT NULL UNIQUE,
+  nombre TEXT NOT NULL,
+  correo TEXT,
+  telefono TEXT,
+  cargo TEXT,
+  contrasena_hash TEXT NOT NULL,
+  rol TEXT NOT NULL CHECK (rol IN ('ADMINISTRADOR','TRABAJADOR')),
+  estado INTEGER NOT NULL DEFAULT 1,
+  creado_en TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS obra (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  nombre TEXT NOT NULL,
+  ubicacion TEXT NOT NULL,
+  fecha_inicio TEXT NOT NULL,
+  estado INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE TABLE IF NOT EXISTS obra_trabajador (
+  obra_id INTEGER NOT NULL REFERENCES obra(id),
+  usuario_id INTEGER NOT NULL REFERENCES usuario(id),
+  PRIMARY KEY (obra_id, usuario_id)
+);
+
+CREATE TABLE IF NOT EXISTS horario (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  obra_id INTEGER NOT NULL REFERENCES obra(id),
+  hora_entrada TEXT NOT NULL,
+  hora_salida TEXT NOT NULL,
+  dias_laborales TEXT NOT NULL,
+  estado INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE TABLE IF NOT EXISTS asistencia (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  usuario_id INTEGER NOT NULL REFERENCES usuario(id),
+  obra_id INTEGER NOT NULL REFERENCES obra(id),
+  horario_id INTEGER NULL REFERENCES horario(id),
+  fecha TEXT NOT NULL,
+  hora_registro TEXT NOT NULL,
+  tipo TEXT NOT NULL CHECK (tipo IN ('ENTRADA','SALIDA')),
+  ubicacion_gps TEXT,
+  estado_horario TEXT NOT NULL,
+  estado TEXT NOT NULL DEFAULT 'ACTIVA' CHECK (estado IN ('ACTIVA','ANULADA','CORREGIDA')),
+  creado_en TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS auditoria (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  asistencia_id INTEGER NOT NULL REFERENCES asistencia(id),
+  responsable_id INTEGER NOT NULL REFERENCES usuario(id),
+  accion TEXT NOT NULL,
+  motivo TEXT NOT NULL,
+  fecha TEXT NOT NULL,
+  detalle TEXT
+);
+
+CREATE TABLE IF NOT EXISTS solicitud_ajuste (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  asistencia_id INTEGER NOT NULL REFERENCES asistencia(id),
+  solicitante_id INTEGER NOT NULL REFERENCES usuario(id),
+  fecha_propuesta TEXT NOT NULL,
+  hora_propuesta TEXT NOT NULL,
+  motivo TEXT NOT NULL,
+  estado TEXT NOT NULL DEFAULT 'PENDIENTE' CHECK (estado IN ('PENDIENTE','APROBADA','RECHAZADA')),
+  resuelto_por INTEGER NULL,
+  resuelto_en TEXT NULL
+);
+`
+
+export function clienteDb(env = process.env) {
+  const crudo = String(env.DB_CLIENT || "").toLowerCase().trim()
+  if (crudo === "sqlite" || crudo === "mssql") return crudo
+  // En Render / sin SQL Server configurado → SQLite gratis y sin servicios extra
+  if (!env.DB_PASSWORD && !env.DB_SERVER) return "sqlite"
+  return "mssql"
+}
+
 export function configDesdeEnv(env = process.env) {
   const crudo = env.DB_SERVER || "localhost\\SQLEXPRESS"
   const partes = crudo.split("\\")
   const esLocal = /^(localhost|127\.0\.0\.1)$/i.test(partes[0])
   const options = {
-    // En la nube (Azure SQL / Render) casi siempre hace falta encrypt=true
     encrypt: env.DB_ENCRYPT != null ? env.DB_ENCRYPT === "true" : !esLocal,
     trustServerCertificate: env.DB_TRUST_CERT != null ? env.DB_TRUST_CERT !== "false" : esLocal,
     enableArithAbort: true,
@@ -110,6 +194,15 @@ export function configDesdeEnv(env = process.env) {
     options.instanceName = partes.slice(1).join("\\")
   }
   return cfg
+}
+
+function rutaSqlite(env = process.env) {
+  if (env.DB_PATH === ":memory:") return ":memory:"
+  const archivo = env.DB_PATH || path.join("data", "arkos.sqlite")
+  if (archivo !== ":memory:") {
+    fs.mkdirSync(path.dirname(path.resolve(archivo)), { recursive: true })
+  }
+  return archivo
 }
 
 function traducirSql(sqlText, paraInsert) {
@@ -135,6 +228,7 @@ export class SqlDb {
   constructor(pool) {
     this.pool = pool
     this.tx = null
+    this.cliente = "mssql"
   }
 
   request() {
@@ -209,6 +303,55 @@ export class SqlDb {
   }
 }
 
+export class SqliteDb {
+  constructor(database) {
+    this.database = database
+    this.cliente = "sqlite"
+  }
+
+  prepare(sqlText) {
+    const db = this.database
+    const stmt = db.prepare(sqlText)
+    return {
+      get: async (...params) => stmt.get(...params),
+      all: async (...params) => stmt.all(...params),
+      run: async (...params) => {
+        try {
+          const info = stmt.run(...params)
+          return { lastInsertRowid: Number(info.lastInsertRowid) }
+        } catch (error) {
+          if (String(error.message || "").includes("UNIQUE")) {
+            const unico = new Error(`UNIQUE ${error.message}`)
+            throw unico
+          }
+          throw error
+        }
+      },
+    }
+  }
+
+  async exec(sqlText) {
+    const comando = String(sqlText).trim().toUpperCase()
+    if (comando === "BEGIN") {
+      this.database.exec("BEGIN")
+      return
+    }
+    if (comando === "COMMIT") {
+      this.database.exec("COMMIT")
+      return
+    }
+    if (comando === "ROLLBACK") {
+      this.database.exec("ROLLBACK")
+      return
+    }
+    this.database.exec(sqlText)
+  }
+
+  async close() {
+    this.database.close()
+  }
+}
+
 async function conectar(cfg) {
   try {
     return await new sql.ConnectionPool(cfg).connect()
@@ -260,14 +403,22 @@ async function sembrar(db) {
   `).run(Number(obra.lastInsertRowid))
 }
 
-export async function openDb(env = process.env) {
+async function openSqlite(env = process.env) {
+  const archivo = rutaSqlite(env)
+  const database = new DatabaseSync(archivo)
+  const db = new SqliteDb(database)
+  await db.exec(SCHEMA_SQLITE)
+  await sembrar(db)
+  console.log(`Base SQLite lista (${archivo}). Ideal para Render gratis.`)
+  return db
+}
+
+async function openMssql(env = process.env) {
   const cfg = configDesdeEnv(env)
   if (!cfg.password) {
-    throw new Error("Falta DB_PASSWORD. Configúralo en .env o en las variables de entorno de Render.")
+    throw new Error("Falta DB_PASSWORD para SQL Server. O usa DB_CLIENT=sqlite para Render gratis.")
   }
 
-  // En local se intenta crear la base. En Azure SQL / la nube suele fallar (normal):
-  // la base ya debe existir y se conecta directo.
   if (env.DB_SKIP_CREATE !== "true") {
     try {
       const master = await conectar({ ...cfg, database: "master" })
@@ -286,12 +437,22 @@ export async function openDb(env = process.env) {
 
   const pool = await conectar(cfg)
   const db = new SqlDb(pool)
-  await db.exec(SCHEMA)
+  await db.exec(SCHEMA_MSSQL)
   await sembrar(db)
   return db
 }
 
+export async function openDb(env = process.env) {
+  if (clienteDb(env) === "sqlite") return openSqlite(env)
+  return openMssql(env)
+}
+
 export async function borrarBase(nombre, env = process.env) {
+  if (clienteDb(env) === "sqlite") {
+    const archivo = rutaSqlite({ ...env, DB_PATH: env.DB_PATH || path.join("data", `${nombre}.sqlite`) })
+    if (archivo !== ":memory:" && fs.existsSync(archivo)) fs.unlinkSync(archivo)
+    return
+  }
   const cfg = configDesdeEnv(env)
   const master = await conectar({ ...cfg, database: "master" })
   try {

@@ -4,17 +4,19 @@ Asistencia de trabajadores en obra — ACM Diseño y Construcciones SAS.
 
 ## Local
 
-1. Copia `.env.example` a `.env` y configura SQL Server Express.
-2. `npm run install:all`
-3. `npm run dev` → web en http://localhost:5173 · API en http://localhost:3000
+1. Copia `.env.example` a `.env`
+2. Para trabajar como siempre con SQL Server / SSMS: deja `DB_CLIENT=mssql` y tus datos `DB_*`
+3. `npm run install:all`
+4. `npm run dev` → http://localhost:5173
 
-## Render
+## Render (gratis, solo un Web Service)
 
-Guía completa: [docs/DESPLIEGUE-RENDER.md](docs/DESPLIEGUE-RENDER.md)
+Guía: [docs/DESPLIEGUE-RENDER.md](docs/DESPLIEGUE-RENDER.md)
 
-- **Build:** `npm install && npm run build`
-- **Start:** `npm start`
-- Base de datos: Azure SQL (Render no ofrece SQL Server)
+- Build: `npm install && npm run build`
+- Start: `npm start`
+- Variables: `NODE_VERSION=22`, `DB_CLIENT=sqlite`, `DB_PATH=:memory:`, `JWT_SECRET=...`
+- Sin Azure ni base externa. Al reiniciar, la app vuelve a empezar con datos de prueba.
 
 ## Cuentas de prueba
 
