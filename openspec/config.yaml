@@ -1,0 +1,19 @@
+schema: spec-driven
+
+context: |
+  Idioma: español. Los artefactos OpenSpec (proposal, design, specs, tasks)
+  y las respuestas del agente en este proyecto deben estar en español.
+  Tech stack: aplicación web React (Vite) y API REST en Node.js con Express,
+  SQLite y JWT. Dominio: Sistema Arkos, asistencia de trabajadores en obra
+  para ACM Diseño y Construcciones SAS.
+  Este repositorio es independiente de cualquier otro proyecto.
+
+rules:
+  proposal:
+    - Escribir todo el contenido en español
+  design:
+    - Escribir todo el contenido en español
+  specs:
+    - Escribir requisitos y escenarios en español
+  tasks:
+    - Escribir todas las tareas en español
