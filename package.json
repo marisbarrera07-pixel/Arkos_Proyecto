@@ -2,12 +2,16 @@
   "name": "sistema-arkos",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "dev": "concurrently -n api,web -c yellow,cyan \"npm run dev:api\" \"npm run dev:web\"",
     "dev:api": "node --disable-warning=ExperimentalWarning --watch server/index.js",
     "dev:web": "npm run dev --prefix client",
+    "install:all": "npm install && npm install --prefix client",
+    "build": "npm install --prefix client && npm run build --prefix client",
     "start": "node --disable-warning=ExperimentalWarning server/index.js",
-    "build": "npm run build --prefix client",
     "test": "node --disable-warning=ExperimentalWarning tests/flujo.mjs"
   },
   "dependencies": {

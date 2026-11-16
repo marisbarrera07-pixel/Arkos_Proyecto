@@ -88,9 +88,11 @@ CREATE TABLE dbo.solicitud_ajuste (
 export function configDesdeEnv(env = process.env) {
   const crudo = env.DB_SERVER || "localhost\\SQLEXPRESS"
   const partes = crudo.split("\\")
+  const esLocal = /^(localhost|127\.0\.0\.1)$/i.test(partes[0])
   const options = {
-    encrypt: env.DB_ENCRYPT === "true",
-    trustServerCertificate: env.DB_TRUST_CERT !== "false",
+    // En la nube (Azure SQL / Render) casi siempre hace falta encrypt=true
+    encrypt: env.DB_ENCRYPT != null ? env.DB_ENCRYPT === "true" : !esLocal,
+    trustServerCertificate: env.DB_TRUST_CERT != null ? env.DB_TRUST_CERT !== "false" : esLocal,
     enableArithAbort: true,
   }
   const cfg = {
@@ -98,6 +100,8 @@ export function configDesdeEnv(env = process.env) {
     database: env.DB_NAME || "Arkos",
     user: env.DB_USER || "arkos",
     password: env.DB_PASSWORD || "",
+    connectionTimeout: Number(env.DB_CONNECTION_TIMEOUT) || 30000,
+    requestTimeout: Number(env.DB_REQUEST_TIMEOUT) || 30000,
     options,
   }
   if (env.DB_PORT) {
@@ -210,7 +214,7 @@ async function conectar(cfg) {
     return await new sql.ConnectionPool(cfg).connect()
   } catch (error) {
     throw new Error(
-      `No se pudo conectar con SQL Server (${cfg.server}). Abre SQL Server Management Studio 22 y confirma que el servicio está en ejecución. ${error.message}`,
+      `No se pudo conectar con SQL Server (${cfg.server}/${cfg.database}). Revisa DB_SERVER, usuario, contraseña y firewall. ${error.message}`,
     )
   }
 }
@@ -259,15 +263,27 @@ async function sembrar(db) {
 export async function openDb(env = process.env) {
   const cfg = configDesdeEnv(env)
   if (!cfg.password) {
-    throw new Error("Falta DB_PASSWORD en el archivo .env. No se pudo conectar con SQL Server.")
+    throw new Error("Falta DB_PASSWORD. Configúralo en .env o en las variables de entorno de Render.")
   }
-  const master = await conectar({ ...cfg, database: "master" })
-  try {
-    const nombre = String(cfg.database).replaceAll("]", "")
-    await master.request().query(`IF DB_ID(N'${nombre}') IS NULL CREATE DATABASE [${nombre}]`)
-  } finally {
-    await master.close()
+
+  // En local se intenta crear la base. En Azure SQL / la nube suele fallar (normal):
+  // la base ya debe existir y se conecta directo.
+  if (env.DB_SKIP_CREATE !== "true") {
+    try {
+      const master = await conectar({ ...cfg, database: "master" })
+      try {
+        const nombre = String(cfg.database).replaceAll("]", "")
+        await master.request().query(`IF DB_ID(N'${nombre}') IS NULL CREATE DATABASE [${nombre}]`)
+      } finally {
+        await master.close()
+      }
+    } catch (error) {
+      console.warn(
+        `No se pudo preparar la base desde master (normal en Azure SQL). Se conectará a ${cfg.database}. ${error.message}`,
+      )
+    }
   }
+
   const pool = await conectar(cfg)
   const db = new SqlDb(pool)
   await db.exec(SCHEMA)

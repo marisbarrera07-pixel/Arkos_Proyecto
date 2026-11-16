@@ -1,0 +1,37 @@
+# Blueprint de Render para Sistema Arkos
+# Dashboard → New → Blueprint → este repo
+#
+# IMPORTANTE: Render NO ofrece SQL Server.
+# Usa Azure SQL (gratis/estudiante) u otro SQL Server accesible por internet
+# y pega sus datos en las variables de entorno de abajo.
+
+services:
+  - type: web
+    name: arkos
+    runtime: node
+    plan: free
+    region: oregon
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/salud
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+      - key: JWT_SECRET
+        generateValue: true
+      - key: DB_SERVER
+        sync: false
+      - key: DB_PORT
+        value: "1433"
+      - key: DB_NAME
+        sync: false
+      - key: DB_USER
+        sync: false
+      - key: DB_PASSWORD
+        sync: false
+      - key: DB_ENCRYPT
+        value: "true"
+      - key: DB_TRUST_CERT
+        value: "false"
+      - key: DB_SKIP_CREATE
+        value: "true"

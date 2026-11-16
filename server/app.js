@@ -15,10 +15,15 @@ export function createApp(db) {
 
   const dist = path.join(__dirname, "..", "client", "dist")
   if (fs.existsSync(dist)) {
-    app.use(express.static(dist))
-    app.use((req, res, next) => {
-      if (req.method !== "GET" || req.path.startsWith("/api")) return next()
+    app.use(express.static(dist, { index: false }))
+    app.get(/^(?!\/api).*/, (_req, res) => {
       res.sendFile(path.join(dist, "index.html"))
+    })
+  } else {
+    app.get("/", (_req, res) => {
+      res.status(503).json({
+        error: "Frontend no construido. En Render el Build Command debe ejecutar npm run build.",
+      })
     })
   }
 
